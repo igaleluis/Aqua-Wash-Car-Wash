@@ -1,0 +1,1387 @@
+<!DOCTYPE html>
+<!--
+ Descripción: Interfaz web de monitoreo y control para un    
+ istema de lavado automático de vehículos. Se comunica con  
+ un microcontrolador ESP32 a través de WebSocket en tiempo   
+ real, mostrando las etapas del lavado, estadísticas del     
+ día y controles manuales para controlar el sistema.                                                          
+ Tecnologías: HTML5 · CSS3 · JavaScript (ES6) · WebSocket   
+  
+-->
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AquaWash — Panel de Control</title>
+
+<!-- Fuentes de Google: Share Tech Mono (estilo terminal) y Barlow Condensed (titulares) -->
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+
+<style>
+  /*
+   * VARIABLES GLOBALES CSS 
+   * Se definen aquí para reutilizarlas en todo el documento.
+   */
+  :root {
+    --bg:       #0a0c10;  /* Fondo principal*/
+    --surface:  #0f1318;  /* Superficie de paneles*/
+    --surface2: #151b22;  /* Superficie secundaria*/
+    --border:   #1e2830;  /* Color de bordes y separadores*/
+    --accent:   #00d4ff;  /* Acento principal*/
+    --accent2:  #00ff9d;  /* Acento secundario*/
+    --warn:     #ffbe00;  /* Advertencia*/
+    --danger:   #ff3b5c;  /* Error*/
+    --text:     #e2ecf4;  /* Texto principal*/
+    --muted:    #4a6070;  /* Texto secundario*/
+    --mono:     'Share Tech Mono', monospace;  /* Fuente de la terminal */
+    --sans:     'Barlow Condensed', sans-serif; /* Fuente de titulos*/
+  }
+
+  /* Reset universal: elimina márgenes, rellenos y usa box-sizing consistente */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /* Estilos base del cuerpo de la página */
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: var(--sans); min-height: 100vh; overflow-x: hidden;
+  }
+
+ 
+  body::before {
+    content: ''; position: fixed; inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px,
+      rgba(0,212,255,0.015) 2px, rgba(0,212,255,0.015) 4px);
+    pointer-events: none; z-index: 1000;
+  }
+
+  /*ENCABEZADO
+   */
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 28px; border-bottom: 1px solid var(--border);
+    background: var(--surface); position: sticky; top: 0; z-index: 100;
+  }
+
+  /* Contenedor del logo*/
+  .logo { display: flex; align-items: center; gap: 12px; }
+
+  /*
+   * Icono del logo con forma de octágono (clip-path polygon).
+   * La animación 'pb' hace que el brillo del borde pulse continuamente.
+   */
+  .logo-icon {
+    width: 40px; height: 40px; border: 2px solid var(--accent);
+    display: flex; align-items: center; justify-content: center; font-size: 18px;
+    clip-path: polygon(10% 0%,90% 0%,100% 10%,100% 90%,90% 100%,10% 100%,0% 90%,0% 10%);
+    background: rgba(0,212,255,0.08); animation: pb 3s ease-in-out infinite;
+  }
+
+  /* Animación de pulso del borde del icono (glow) */
+  @keyframes pb {
+    0%,100% { box-shadow: 0 0 8px rgba(0,212,255,0.3); }
+    50%      { box-shadow: 0 0 20px rgba(0,212,255,0.6); }
+  }
+
+  /* Título principal "AQUAWASH" */
+  .logo-title {
+    font-size: 21px; font-weight: 900; letter-spacing: 4px;
+    color: var(--accent); text-transform: uppercase; line-height: 1;
+  }
+
+  /* Subtítulo debajo del logo: "SISTEMA DE CONTROL CAR WASH" */
+  .logo-sub { font-size: 10px; letter-spacing: 3px; color: var(--muted); font-family: var(--mono); }
+
+  /* Contenedor derecho del header: badge WebSocket + reloj */
+  .header-right { display: flex; align-items: center; gap: 18px; }
+
+  /*
+   * Badge de estado de WebSocket (botón clicable que abre el modal de conexión).
+   * Muestra el punto de color (rojo/verde/amarillo) y el texto de estado.
+   */
+  .ws-badge {
+    display: flex; align-items: center; gap: 8px; padding: 5px 12px;
+    border: 1px solid var(--border); background: var(--surface2);
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    cursor: pointer; transition: border-color .2s;
+  }
+
+  .ws-badge:hover { border-color: var(--accent); }
+
+  /*
+   * Punto indicador de estado de la conexión WebSocket:
+   */
+  .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--danger); transition: background .3s;
+  }
+
+  .dot.on  { background: var(--accent2); animation: blink 1.5s ease-in-out infinite; }
+  .dot.sim { background: var(--warn); }
+
+  /* Animación de parpadeo suave para el punto "conectado" */
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  /* Reloj digital en tiempo real (HH:MM:SS) */
+  .clock { font-family: var(--mono); font-size: 17px; color: var(--accent); letter-spacing: 2px; }
+
+  /* ── MODAL DE CONFIGURACIÓN WEBSOCKET ──────────────────────
+   * Ventana emergente para ingresar el host y puerto del ESP32.
+   */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,.75); z-index: 500;
+    align-items: center; justify-content: center;
+  }
+
+  /* Cuando se añade la clase "open", el modal se muestra como flex */
+  .modal-overlay.open { display: flex; }
+
+  /* Caja interior del modal */
+  .modal {
+    background: var(--surface); border: 1px solid var(--accent);
+    padding: 28px; width: 360px; display: flex; flex-direction: column; gap: 14px;
+  }
+
+  .modal h3 {
+    font-size: 13px; letter-spacing: 3px; color: var(--accent);
+    font-family: var(--mono); text-transform: uppercase;
+  }
+
+  /* Etiquetas de los campos del formulario */
+  .modal label { font-size: 10px; letter-spacing: 2px; color: var(--muted); font-family: var(--mono); }
+
+  /* Campos de texto para host y puerto */
+  .modal input {
+    width: 100%; padding: 10px 12px; margin-top: 4px;
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); font-family: var(--mono); font-size: 13px; outline: none;
+  }
+
+  .modal input:focus { border-color: var(--accent); }
+
+  /* Fila de botones: "Cancelar" y "Conectar" */
+  .modal-btns { display: flex; gap: 10px; margin-top: 4px; }
+
+  /* Botones del modal */
+  .mbtn {
+    flex: 1; padding: 11px; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--text);
+    font-family: var(--sans); font-size: 12px; font-weight: 700;
+    letter-spacing: 2px; text-transform: uppercase; cursor: pointer; transition: all .2s;
+  }
+
+  /* Variante destacada (botón "Conectar") */
+  .mbtn.primary { border-color: rgba(0,212,255,.4); color: var(--accent); }
+  .mbtn.primary:hover { background: rgba(0,212,255,.1); }
+  .mbtn:hover { border-color: var(--muted); }
+
+  /* ── LAYOUT PRINCIPAL ──────────────────────────────────────
+   * Contenedor principal. Usa CSS Grid de una columna con espacio
+   * entre las secciones (top stats, tipo lavado, etapas, bottom). */
+  main { padding: 20px 28px; display: grid; gap: 18px; }
+
+  /* ── FILA SUPERIOR: 3 tarjetas de estadísticas ──────────── */
+  .top-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+
+  /*
+   * Tarjeta de estadística individual.
+   * El pseudo-elemento ::before dibuja una barra vertical de color
+   * en el lado izquierdo (azul por defecto, verde o amarillo con modificadores).
+   */
+  .stat-card {
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 18px 22px; position: relative; overflow: hidden; transition: border-color .3s;
+  }
+
+  /* Barra de acento izquierda (azul por defecto) */
+  .stat-card::before {
+    content: ''; position: absolute; top: 0; left: 0;
+    width: 3px; height: 100%; background: var(--accent);
+  }
+
+  /* Modificadores de color para la barra lateral */
+  .stat-card.green::before  { background: var(--accent2); } /* verde para "Estado" */
+  .stat-card.yellow::before { background: var(--warn); }    /* amarillo para "Ciclos" */
+
+  /* Etiqueta pequeña encima del valor principal */
+  .stat-label {
+    font-size: 10px; letter-spacing: 3px; color: var(--muted);
+    text-transform: uppercase; font-family: var(--mono); margin-bottom: 6px;
+  }
+
+  /* Número grande */
+  .stat-value { font-size: 38px; font-weight: 900; line-height: 1; letter-spacing: -1px; }
+  .stat-value span { font-size: 15px; font-weight: 400; color: var(--muted); margin-left: 4px; }
+
+  /* Línea de texto pequeño debajo del valor */
+  .stat-delta { margin-top: 6px; font-size: 11px; font-family: var(--mono); color: var(--accent2); }
+
+  /* ── SECCIÓN TIPO DE LAVADO ─────────────────────────────────
+   * Fila con dos tarjetas: "Completo" y "Rápido".
+   * Al seleccionar una, la otra se bloquea visualmente. */
+  .wash-type-section { display: flex; flex-direction: column; gap: 10px; }
+
+  /* Cabecera de la sección: título + badge de bloqueo */
+  .wash-type-header {
+    display: flex; align-items: center; justify-content: space-between;
+  }
+
+  .wash-type-title {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 4px;
+    color: var(--muted); text-transform: uppercase;
+  }
+
+  /*
+   * Badge "BLOQUEADO" que aparece cuando se ha elegido un tipo de lavado.
+   * Oculto por defecto (display:none); se muestra añadiendo la clase "visible".
+   */
+  .lock-badge {
+    display: none;
+    align-items: center; gap: 6px; padding: 4px 12px;
+    font-family: var(--mono); font-size: 10px; letter-spacing: 2px;
+    border: 1px solid var(--warn); color: var(--warn);
+    background: rgba(255,190,0,0.07);
+    animation: fadein .3s ease;
+  }
+
+  .lock-badge.visible { display: flex; }
+
+  /* Animación de aparición del badge */
+  @keyframes fadein { from{opacity:0} to{opacity:1} }
+
+  /* Grid de dos columnas para las tarjetas de tipo */
+  .wash-type-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+  /* Tarjeta individual de tipo de lavado */
+  .type-card {
+    background: var(--surface); border: 2px solid var(--border);
+    padding: 20px 24px; cursor: pointer;
+    transition: all .3s; position: relative; overflow: hidden;
+  }
+
+  /* Estado bloqueado: la tarjeta seleccionada se bloquea (no se puede desmarcar mid-ciclo) */
+  .type-card.locked {
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+
+  /* Estado "locked-out": la tarjeta NO seleccionada se desvanece y desactiva */
+  .type-card.locked-out {
+    opacity: 0.28;
+    cursor: not-allowed;
+    pointer-events: none;
+    filter: grayscale(60%);
+  }
+
+  /* Brillo de hover (degradado diagonal sutil) */
+  .type-card::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(135deg, rgba(0,212,255,0) 60%, rgba(0,212,255,0.05) 100%);
+    transition: opacity .3s; opacity: 0;
+  }
+
+  .type-card:not(.locked):not(.locked-out):hover::after { opacity: 1; }
+
+  /* Tarjeta seleccionada — Lavado Completo (acento azul) */
+  .type-card.selected {
+    border-color: var(--accent);
+    background: rgba(0,212,255,0.06);
+    box-shadow: 0 0 20px rgba(0,212,255,0.12);
+  }
+
+  /* Tarjeta seleccionada — Lavado Rápido (acento verde) */
+  .type-card.selected-r {
+    border-color: var(--accent2);
+    background: rgba(0,255,157,0.06);
+    box-shadow: 0 0 20px rgba(0,255,157,0.12);
+  }
+
+  /* Ícono de candado en la esquina inferior derecha (visible solo en estado locked del seleccion de lavado) */
+  .type-lock-icon {
+    display: none; position: absolute; bottom: 10px; right: 14px;
+    font-size: 14px; opacity: .6;
+  }
+
+  .type-card.locked .type-lock-icon { display: block; }
+
+  /* Emoji grande representando el tipo de lavado */
+  .type-icon { font-size: 28px; margin-bottom: 8px; }
+
+  /* Nombre del tipo (COMPLETO / RÁPIDO) */
+  .type-name {
+    font-size: 18px; font-weight: 900; letter-spacing: 3px;
+    text-transform: uppercase; color: var(--text);
+  }
+
+  /* Cambios de color del nombre según el estado seleccionado */
+  .type-card.selected   .type-name { color: var(--accent); }
+  .type-card.selected-r .type-name { color: var(--accent2); }
+
+  /* Descripción breve del tipo de lavado */
+  .type-desc { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 4px; }
+
+  /* Etiqueta del comando en la esquina superior derecha (p.ej. "LAVADOC") */
+  .type-tag {
+    position: absolute; top: 12px; right: 14px;
+    font-family: var(--mono); font-size: 9px; letter-spacing: 2px;
+    padding: 2px 8px; border: 1px solid var(--border); color: var(--muted);
+    transition: all .3s;
+  }
+
+  /* Cambios de color del tag según selección */
+  .type-card.selected   .type-tag { border-color: var(--accent); color: var(--accent); }
+  .type-card.selected-r .type-tag { border-color: var(--accent2); color: var(--accent2); }
+
+  /* ── FILA MEDIA: panel de etapas (2/3) + controles (1/3) ── */
+  .mid-row { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; }
+
+  /* Panel genérico con fondo oscuro y borde */
+  .panel { background: var(--surface); border: 1px solid var(--border); padding: 22px; }
+
+  /* Cabecera del panel: título izquierda, badge derecha */
+  .panel-header {
+    display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px;
+  }
+
+  /* Título del panel en mayúsculas y letra pequeña */
+  .panel-title {
+    font-size: 10px; letter-spacing: 4px; color: var(--muted);
+    text-transform: uppercase; font-family: var(--mono);
+  }
+
+  /* Badge "EN VIVO" verde (sólo decorativo) */
+  .live-badge {
+    font-family: var(--mono); font-size: 10px; padding: 3px 10px;
+    background: rgba(0,255,157,0.1); border: 1px solid rgba(0,255,157,0.3);
+    color: var(--accent2); letter-spacing: 2px;
+    display: flex; align-items: center; gap: 6px;
+  }
+
+  /* ── ESTACIONES DEL PROCESO DE LAVADO ───────────────────────
+   * Se renderizan dinámicamente con JS (función renderStages).
+   * Cada etapa ocupa el mismo ancho flexible (flex:1). */
+  .stages { display: flex; margin-bottom: 18px; }
+
+  /* Bloque individual de una etapa */
+  .stage {
+    flex: 1; padding: 12px 4px; text-align: center;
+    border: 1px solid var(--border); margin-right: -1px;
+    position: relative; transition: all .4s;
+  }
+
+  /*
+   * Estados visuales de una etapa:
+   *  - .active → etapa en curso (verde con pulso animado)
+   *  - .done   → etapa completada (verde apagado)
+   *  - .idle   → etapa pendiente (gris/transparente)
+   * NOTA: la etapa activa también muestra el checkmark ✓ (ver renderStages en JS)
+   */
+  .stage.active { border-color: var(--accent2); background: rgba(0,255,157,0.07); z-index: 2; }
+  .stage.done   { border-color: rgba(0,255,157,0.3); background: rgba(0,255,157,0.04); }
+  .stage.idle   { opacity: .35; }
+
+  /* Emoji/ícono centrado de la etapa */
+  .stage-icon { font-size: 17px; margin-bottom: 4px; display: block; }
+
+  /* Nombre corto de la etapa */
+  .stage-name {
+    font-size: 8px; letter-spacing: .5px; color: var(--muted);
+    text-transform: uppercase; font-family: var(--mono); line-height: 1.3;
+  }
+
+  /* Las etapas activa y completada usan verde para el nombre */
+  .stage.active .stage-name { color: var(--accent2); }
+  .stage.done   .stage-name { color: var(--accent2); }
+
+  /* Checkmark (✓) en la esquina superior derecha de etapas activas/completadas */
+  .stage-check { position: absolute; top: 4px; right: 4px; font-size: 9px; color: var(--accent2); }
+
+  /* Animación de pulso (glow) para la etapa activa — la distingue visualmente */
+  .stage.active {
+    box-shadow: 0 0 12px rgba(0,255,157,0.2);
+    animation: stageGlow 1.8s ease-in-out infinite;
+  }
+
+  @keyframes stageGlow {
+    0%,100% { box-shadow: 0 0 8px rgba(0,255,157,0.15); }
+    50%      { box-shadow: 0 0 18px rgba(0,255,157,0.4); }
+  }
+
+  /* ── BARRA DE PROGRESO DEL CICLO ──── */
+  /* Fila de etiquetas: "PROGRESO DEL CICLO" a la izquierda y "XX%" a la derecha */
+  .prog-labels {
+    display: flex; justify-content: space-between;
+    font-family: var(--mono); font-size: 10px; color: var(--muted); margin-bottom: 5px;
+  }
+
+  /* Fondo gris de la barra de progreso */
+  .prog-bg { height: 5px; background: var(--surface2); border: 1px solid var(--border); }
+
+  /* Relleno animado de la barra (de azul a verde según avanza el ciclo) */
+  .prog-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transition: width 1s ease; position: relative;
+  }
+
+  /* Marcador blanco al final de la barra de progreso */
+  .prog-fill::after {
+    content: ''; position: absolute; right: 0; top: -3px;
+    width: 2px; height: 11px; background: white; opacity: .8;
+  }
+
+  /* Pie del panel de etapas: etapa actual y último comando */
+  .cycle-footer {
+    display: flex; justify-content: space-between;
+    font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 10px;
+  }
+
+  /* ── PANEL DE CONTROLES MANUALES ───────────────────────────
+   * Columna derecha en la fila media con botones para el operador. */
+  .controls-panel {
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 22px; display: flex; flex-direction: column; gap: 9px;
+  }
+
+  /* Botón de control genérico */
+  .ctrl-btn {
+    border: 1px solid var(--border); background: var(--surface2);
+    color: var(--text); font-family: var(--sans); font-size: 11px;
+    font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+    padding: 12px; cursor: pointer; transition: all .2s;
+    display: flex; align-items: center; gap: 8px;
+  }
+
+  .ctrl-btn:hover { border-color: var(--accent); background: rgba(0,212,255,.08); color: var(--accent); }
+  .ctrl-btn:disabled { opacity: .35; cursor: not-allowed; }
+  .ctrl-btn:disabled:hover { border-color: var(--border); background: var(--surface2); color: var(--text); }
+
+  /* Variante verde: acción positiva (Iniciar motor, etc.) */
+  .ctrl-btn.start {
+    border-color: rgba(0,255,157,.4); background: rgba(0,255,157,.07); color: var(--accent2);
+  }
+
+  .ctrl-btn.start:hover { background: rgba(0,255,157,.15); box-shadow: 0 0 18px rgba(0,255,157,.2); }
+
+  /* Variante roja: acción de parada o peligro */
+  .ctrl-btn.stop {
+    border-color: rgba(255,59,92,.4); color: var(--danger); background: rgba(255,59,92,.05);
+  }
+
+  .ctrl-btn.stop:hover { background: rgba(255,59,92,.12); }
+
+  /* Separador horizontal entre grupos de botones */
+  .ctrl-sep  { height: 1px; background: var(--border); margin: 4px 0; }
+
+  /* Etiqueta de grupo de botones (p.ej. "Motor", "Ciclo", "Sistema") */
+  .ctrl-label {
+    font-family: var(--mono); font-size: 9px; letter-spacing: 3px;
+    color: var(--muted); text-transform: uppercase; padding: 2px 0;
+  }
+
+  /* ── FILA INFERIOR: Estado del sistema + Log de eventos ─── */
+  .bottom-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+
+  /* Contenedor de los 4 indicadores de estado */
+  .status-wrap { margin-top: 14px; display: flex; flex-direction: column; gap: 9px; }
+
+  /*
+   * Fila de estado individual (Espera / Proceso / Finalizado / Error).
+   * Usa la variable CSS "--sc" (status-color) definida inline en cada elemento
+   * para personalizar su color sin duplicar estilos.
+   */
+  .sts-item {
+    display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+    border: 1px solid var(--border); background: var(--surface2);
+    transition: all .3s; position: relative; overflow: hidden;
+  }
+
+  /* Estado activo: fondo teñido con el color del estado y borde resaltado */
+  .sts-item.active-status {
+    border-color: var(--sc);
+    background: color-mix(in srgb, var(--sc) 8%, var(--surface2));
+  }
+
+  /* Barra lateral de color cuando el estado está activo */
+  .sts-item.active-status::before {
+    content: ''; position: absolute; left: 0; top: 0;
+    width: 3px; height: 100%; background: var(--sc);
+  }
+
+  /* Punto circular de color de cada estado */
+  .sdot { width: 13px; height: 13px; border-radius: 50%; flex-shrink: 0; transition: all .4s; }
+
+  /* El punto pulsa cuando ese estado está activo */
+  .sts-item.active-status .sdot {
+    box-shadow: 0 0 10px var(--sc);
+    animation: pd 1.5s ease-in-out infinite;
+  }
+
+  /* Animación del punto activo (pulso + escala) */
+  @keyframes pd { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.6;transform:scale(1.2)} }
+
+  .sinfo { flex: 1; } /* Contenedor del nombre y descripción del estado */
+
+  /* Nombre del estado en mayúsculas */
+  .sname {
+    font-size: 12px; font-weight: 700; letter-spacing: 2px;
+    text-transform: uppercase; color: var(--text);
+  }
+
+  .sts-item.active-status .sname { color: var(--sc); }
+
+  /* Descripción y comando asociado al estado */
+  .sdesc { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+  /* Badge "ACTIVO" que aparece dinámicamente (lo inserta JS) */
+  .stag {
+    font-family: var(--mono); font-size: 9px; letter-spacing: 2px;
+    padding: 2px 7px; border: 1px solid var(--sc); color: var(--sc);
+  }
+
+  /* ── REGISTRO DE EVENTOS (LOG) ──────────────────────────────
+   * Lista con scroll vertical de hasta 35 entradas. Las nuevas
+   * entradas se insertan al principio (prepend). */
+  .log-list {
+    margin-top: 14px; display: flex; flex-direction: column; gap: 5px;
+    max-height: 240px; overflow-y: auto;
+  }
+
+  /* Scroll personalizado (barra delgada y discreta) */
+  .log-list::-webkit-scrollbar { width: 3px; }
+  .log-list::-webkit-scrollbar-track { background: var(--surface2); }
+  .log-list::-webkit-scrollbar-thumb { background: var(--border); }
+
+  /* Entrada individual del log */
+  .log-entry {
+    display: flex; gap: 10px; font-family: var(--mono); font-size: 11px;
+    padding: 5px 9px; background: var(--surface2);
+    border-left: 2px solid var(--border);
+    animation: fi .35s ease; /* aparece con deslizamiento */
+  }
+
+  @keyframes fi { from{opacity:0;transform:translateX(-5px)} to{opacity:1;transform:translateX(0)} }
+
+  /* Colores del borde izquierdo según el tipo de log */
+  .log-entry.info { border-left-color: var(--accent); }  /* azul: informativo */
+  .log-entry.ok   { border-left-color: var(--accent2); } /* verde: éxito       */
+  .log-entry.warn { border-left-color: var(--warn); }    /* amarillo: aviso    */
+  .log-entry.err  { border-left-color: var(--danger); }  /* rojo: error        */
+
+  /* Timestamp (HH:MM:SS) de cada entrada del log */
+  .log-time { color: var(--muted); min-width: 54px; }
+
+  /* Monitor del último comando enviado/recibido */
+  .cmd-monitor {
+    margin-top: 14px; padding: 10px 12px;
+    background: var(--surface2); border: 1px solid var(--border);
+    font-family: var(--mono); font-size: 11px;
+    display: flex; align-items: center; gap: 10px;
+  }
+
+  .cmd-label { color: var(--muted); letter-spacing: 2px; font-size: 9px; }
+  .cmd-value { color: var(--accent); font-size: 13px; font-weight: bold; }
+
+  /* ── DISEÑO RESPONSIVO ──────────────────────────────────────
+   * Para pantallas medianas (≤1050px): las 3 columnas superiores
+   * se reducen a 2, y las filas media/inferior pasan a 1 columna. */
+  @media (max-width: 1050px) {
+    .top-row    { grid-template-columns: 1fr 1fr; }
+    .mid-row    { grid-template-columns: 1fr; }
+    .bottom-row { grid-template-columns: 1fr; }
+  }
+
+  /* Para pantallas pequeñas/móviles (≤620px): ajustes adicionales */
+  @media (max-width: 620px) {
+    header, main { padding: 12px 14px; }
+    .top-row { grid-template-columns: 1fr 1fr; }
+    .wash-type-row { grid-template-columns: 1fr 1fr; }
+    .stages { flex-wrap: wrap; } /* las etapas se envuelven en varias filas */
+    .stage { flex: 0 0 30%; margin-bottom: 6px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="modal-overlay" id="ws-modal">
+  <div class="modal">
+    <h3>🔌 Configurar Conexión ESP32</h3>
+
+    <!-- Campo: dirección IP o hostname del ESP32 -->
+    <div>
+      <label>HOST DEL ESP32</label>
+      <input type="text" id="ws-ip" value="carwash.local" placeholder="carwash.local">
+    </div>
+
+    <!-- Campo: puerto WebSocket del ESP32 (por defecto 81) -->
+    <div>
+      <label>PUERTO WEBSOCKET</label>
+      <input type="text" id="ws-port" value="81" placeholder="81">
+    </div>
+
+    <!-- Botones: Cancelar cierra el modal; Conectar llama a connectWS() -->
+    <div class="modal-btns">
+      <button class="mbtn" onclick="closeModal()">Cancelar</button>
+      <button class="mbtn primary" onclick="connectWS()">Conectar</button>
+    </div>
+
+    <!-- Mensaje de estado de la conexión (se actualiza por JS) -->
+    <div style="font-family:var(--mono);font-size:10px;color:var(--muted);border-top:1px solid var(--border);padding-top:12px;">
+      <span id="ws-status-text">Sin conexión</span>
+    </div>
+  </div>
+</div>
+
+<header>
+  <!-- Logo: ícono de gota + nombre + subtítulo -->
+  <div class="logo">
+    <div class="logo-icon">💧</div>
+    <div style="display:flex;flex-direction:column;">
+      <div class="logo-title">AquaWash</div>
+      <div class="logo-sub">SISTEMA DE CONTROL CAR WASH</div>
+    </div>
+  </div>
+
+  <!-- Sección derecha: badge de WebSocket + reloj en tiempo real -->
+  <div class="header-right">
+    <!-- Badge clicable: muestra el estado de conexión y abre el modal al hacer clic -->
+    <div class="ws-badge" onclick="openModal()" title="Configurar conexión ESP32">
+      <div class="dot" id="ws-dot"></div>      <!-- Punto de color (rojo/verde/amarillo) -->
+      <span id="ws-label">DESCONECTADO</span>  <!-- Texto de estado de conexión -->
+    </div>
+    <!-- Reloj digital actualizado cada segundo por JS (función updateClock) -->
+    <div class="clock" id="clock">--:--:--</div>
+  </div>
+</header>
+
+<main>
+
+  <!-- ── FILA SUPERIOR: Tarjetas de estadísticas rápidas ─── -->
+  <div class="top-row">
+
+    <!-- Tarjeta 1: Contador de vehículos atendidos hoy -->
+    <div class="stat-card">
+      <div class="stat-label">Carros Atendidos Hoy</div>
+      <div class="stat-value" id="cars-today">0<span>veh</span></div>
+      <div class="stat-delta" id="cars-delta">—</div>
+    </div>
+
+    <!-- Tarjeta 2: Estado actual del sistema (ESPERA / PROCESO / FINALIZADO / ERROR) -->
+    <div class="stat-card green">
+      <div class="stat-label">Estado Actual del Sistema</div>
+      <div class="stat-value" style="font-size:24px;color:var(--accent2)" id="state-main">ESPERA</div>
+      <div class="stat-delta" id="state-sub" style="color:var(--muted)">Sin actividad</div>
+    </div>
+
+    <!-- Tarjeta 3: Ciclos totales completados y temporizador del ciclo activo -->
+    <div class="stat-card yellow">
+      <div class="stat-label">Ciclos Totales</div>
+      <div class="stat-value" id="total-cycles">0<span>ciclos</span></div>
+      <div class="stat-delta">
+        CICLO: <span id="cycle-time" style="color:var(--warn)">00:00</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SELECCIÓN DE TIPO DE LAVADO ───────────────────────── -->
+  <!-- Una vez seleccionado, la otra opción se bloquea hasta que  -->
+  <!-- el ciclo finalice o se haga RESET.                         -->
+  <div class="wash-type-section">
+    <div class="wash-type-header">
+      <span class="wash-type-title">Tipo de Lavado</span>
+      <!-- Badge de bloqueo: oculto por defecto, visible cuando se ha elegido un tipo -->
+      <div class="lock-badge" id="lock-badge">
+        🔒 <span id="lock-badge-text">SELECCIÓN BLOQUEADA</span>
+      </div>
+    </div>
+
+    <div class="wash-type-row">
+
+      <!-- Tarjeta: Lavado Completo (incluye cepillado) — Comando: LAVADOC -->
+      <div class="type-card" id="type-completo" onclick="selectType('completo')">
+        <div class="type-tag" id="tag-completo">LAVADOC</div>
+        <div class="type-icon">🚗</div>
+        <div class="type-name">Completo</div>
+        <div class="type-desc">Limpieza profunda con atención detallada en cada estación del proceso.</div>
+        <span class="type-lock-icon">🔒</span>
+      </div>
+
+      <!-- Tarjeta: Lavado Rápido (sin cepillado) — Comando: LAVADOR -->
+      <div class="type-card" id="type-rapido" onclick="selectType('rapido')">
+        <div class="type-tag" id="tag-rapido">LAVADOR</div>
+        <div class="type-icon">⚡</div>
+        <div class="type-name">Rápido</div>
+        <div class="type-desc">Lavado eficiente y continuo para dejar tu vehículo limpio en menos tiempo</div>
+        <span class="type-lock-icon">🔒</span>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── FILA MEDIA: Panel de etapas + Panel de controles ─── -->
+  <div class="mid-row">
+
+    <!-- Panel izquierdo: visualización de las etapas del lavado -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Etapas de Lavado</div>
+        <div class="live-badge"><div class="dot on"></div>EN VIVO</div>
+      </div>
+
+      <!-- Contenedor de etapas: se puebla dinámicamente con renderStages() en JS -->
+      <div class="stages" id="stages-wrap"></div>
+
+      <!-- Barra de progreso del ciclo actual (0% → 100%) -->
+      <div>
+        <div class="prog-labels">
+          <span>PROGRESO DEL CICLO</span>
+          <span id="progress-pct">0%</span>
+        </div>
+        <div class="prog-bg">
+          <!-- El ancho se actualiza por JS según la etapa actual -->
+          <div class="prog-fill" id="progress-fill" style="width:0%"></div>
+        </div>
+      </div>
+
+      <!-- Pie del panel: etapa actual y último comando recibido/enviado -->
+      <div class="cycle-footer">
+        <span>ETAPA ACTUAL: <span id="stage-label" style="color:var(--accent)">—</span></span>
+        <span>ÚLTIMO COMANDO: <span id="last-cmd" style="color:var(--accent)">—</span></span>
+      </div>
+    </div>
+
+    <!-- Panel derecho: controles manuales del operador -->
+    <div class="controls-panel">
+      <div class="panel-title" style="margin-bottom:2px;">Control Manual</div>
+
+      <!-- Grupo Motor: encender/apagar motor principal -->
+      <div class="ctrl-label">Motor</div>
+      <!-- El texto e icono del botón cambian según S.motorOn (función updateMotorBtn) -->
+      <button class="ctrl-btn start" id="btn-motor" onclick="toggleMotor()">▶ MOTOR ON</button>
+
+      <div class="ctrl-sep"></div>
+
+      <!-- Grupo Ciclo: pausar/reanudar el ciclo activo -->
+      <div class="ctrl-label">Ciclo</div>
+      <!-- Deshabilitado por defecto; se habilita cuando hay un ciclo en proceso -->
+      <button class="ctrl-btn" id="btn-pause" onclick="sendCmd('PAUSA')" disabled>⏸ PAUSAR</button>
+
+      <div class="ctrl-sep"></div>
+
+      <!-- Grupo Sistema: herramientas de prueba y reinicio -->
+      <div class="ctrl-label">Sistema</div>
+      <!-- Simula un error para probar el comportamiento sin hardware real -->
+      <button class="ctrl-btn stop" onclick="sendCmd('ERROR_SIM')">⚠ SIMULAR ERROR</button>
+      <!-- Reinicia el sistema al estado inicial (ESPERA) -->
+      <button class="ctrl-btn" onclick="sendCmd('RESET')">↺ RESET</button>
+
+      <div class="ctrl-sep"></div>
+
+      <!-- Monitor del último comando enviado al ESP32 -->
+      <div class="ctrl-label">Último enviado</div>
+      <div class="cmd-monitor">
+        <span class="cmd-label">CMD</span>
+        <span class="cmd-value" id="last-sent">—</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── FILA INFERIOR: Estado del sistema + Registro de eventos ── -->
+  <div class="bottom-row">
+
+    <!-- Panel izquierdo: indicadores de estado del sistema -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Estado del Sistema</div>
+      </div>
+
+      <div class="status-wrap">
+        
+
+        <!-- Estado: EN ESPERA — sistema listo para recibir vehículo -->
+        <div class="sts-item" id="sts-espera" style="--sc:#00ff9d;">
+          <div class="sdot" style="background:#00ff9d;"></div>
+          <div class="sinfo">
+            <div class="sname">En Espera</div>
+            <div class="sdesc">Sistema listo · Comando: ESPERA</div>
+          </div>
+        </div>
+
+        <!-- Estado: LAVADO EN PROCESO — ciclo activo en curso -->
+        <div class="sts-item" id="sts-proceso" style="--sc:#00d4ff;">
+          <div class="sdot" style="background:#00d4ff;"></div>
+          <div class="sinfo">
+            <div class="sname">Lavado en Proceso</div>
+            <div class="sdesc">Ciclo activo · Comando: PROCESO</div>
+          </div>
+        </div>
+
+        <!-- Estado: PROCESO FINALIZADO — vehículo listo para retirar -->
+        <div class="sts-item" id="sts-finalizado" style="--sc:#ffbe00;">
+          <div class="sdot" style="background:#ffbe00;"></div>
+          <div class="sinfo">
+            <div class="sname">Proceso Finalizado</div>
+            <div class="sdesc">Vehículo listo · Comando: FINALIZADO</div>
+          </div>
+        </div>
+
+        <!-- Estado: ERROR / EMERGENCIA — requiere intervención del operador -->
+        <div class="sts-item" id="sts-error" style="--sc:#ff3b5c;">
+          <div class="sdot" style="background:#ff3b5c;"></div>
+          <div class="sinfo">
+            <div class="sname">Error / Emergencia</div>
+            <div class="sdesc">Intervención requerida</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Panel derecho: registro en tiempo real de eventos del sistema -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Registro de Eventos</div>
+        <div class="live-badge"><div class="dot on"></div>STREAM</div>
+      </div>
+      <!-- Lista de log: las entradas se insertan al inicio con addLog() -->
+      <!-- Máximo 35 entradas visibles (las más antiguas se eliminan) -->
+      <div class="log-list" id="log-list"></div>
+    </div>
+
+  </div>
+
+</main>
+
+<script>
+// ESTADO GLOBAL DE LA APLICACIÓN (objeto S)
+// ───────────────────────────────────────────────────────────────
+// Todas las variables de estado se agrupan en este único objeto
+// para facilitar su lectura y evitar variables globales dispersas.
+const S = {
+  wsConn:         null,     // Instancia activa del WebSocket (o null si no hay conexión)
+  wsConnected:    false,    // true = hay conexión activa con el ESP32
+  motorOn:        false,    // true = el motor principal está encendido
+  paused:         false,    // true = el ciclo está pausado temporalmente
+  systemStatus:   'espera', // Estado actual: 'espera' | 'proceso' | 'finalizado' | 'error'
+  washType:       null,     // Tipo de lavado elegido: 'completo' | 'rapido' | null
+  washTypeLocked: false,    // true = no se puede cambiar el tipo durante un ciclo activo
+  currentStage:   -1,       // Índice de la etapa activa en el array de etapas (-1 = ninguna)
+  cycleSeconds:   0,        // Contador de segundos del ciclo actual (para el temporizador)
+  carsToday:      0,        // Vehículos atendidos durante la sesión actual
+  totalCycles:    0,        // Ciclos completos acumulados en la sesión
+};
+
+// DEFINICIÓN DE ETAPAS DEL PROCESO DE LAVADO
+// ───────────────────────────────────────────────────────────────
+// Catálogo completo con todas las etapas posibles.
+// Cada objeto tiene:
+//   id  → identificador interno único
+//   icon → emoji para la UI
+//   name → nombre mostrado en la tarjeta
+//   cmd  → comando WebSocket que activa esta etapa
+const STAGES_ALL = [
+  { id: 'inicio',     icon: '🚗', name: 'Inicio',    cmd: 'INICIO'     },
+  { id: 'elec',       icon: '👆', name: 'Elección',  cmd: 'ELECLAVADO' },
+  { id: 'prelavado',  icon: '🚿', name: 'Pre-lavado', cmd: 'PRELAVADO'  },
+  { id: 'jabon',      icon: '🧼', name: 'Jabón',     cmd: 'JABON'      },
+  { id: 'cepillo',    icon: '🪥', name: 'Cepillado', cmd: 'CEPILLO'    }, // Solo en Lavado Completo
+  { id: 'enjuague',   icon: '♻️', name: 'Enjuague',  cmd: 'ENJUAGUE'   },
+  { id: 'secado',     icon: '💨', name: 'Secado',    cmd: 'SECADO'     },
+  { id: 'finalizado', icon: '✅', name: 'Listo',     cmd: 'FINALIZADO' },
+];
+
+// Secuencia de etapas para Lavado COMPLETO (incluye cepillado)
+const STAGES_COMPLETO = ['inicio','elec','prelavado','jabon','cepillo','enjuague','secado','finalizado'];
+// Secuencia de etapas para Lavado RÁPIDO (sin cepillado)
+const STAGES_RAPIDO   = ['inicio','elec','prelavado','jabon','enjuague','secado','finalizado'];
+
+/**
+ * Retorna el array de etapas activas según el tipo de lavado seleccionado.
+ * Si no se ha elegido tipo (null), devuelve el lavado Completo por defecto.
+ */
+function getActiveStages() {
+  const ids = S.washType === 'rapido' ? STAGES_RAPIDO : STAGES_COMPLETO;
+  return STAGES_ALL.filter(s => ids.includes(s.id));
+}
+
+// Mapa inverso CMD → id de etapa para búsquedas rápidas por comando.
+// Ejemplo: CMD_TO_STAGE['JABON'] === 'jabon'
+const CMD_TO_STAGE = {};
+STAGES_ALL.forEach(s => { CMD_TO_STAGE[s.cmd] = s.id; });
+
+// RELOJ EN TIEMPO REAL
+// ───────────────────────────────────────────────────────────────
+// Actualiza el elemento #clock con la hora actual cada segundo.
+// slice(0,8) extrae "HH:MM:SS" del string completo de toTimeString().
+function updateClock() {
+  document.getElementById('clock').textContent = new Date().toTimeString().slice(0,8);
+}
+setInterval(updateClock, 1000); // Llama a updateClock cada 1000ms (1 segundo)
+updateClock();                   // Llamada inmediata para evitar el retraso inicial
+
+// WEBSOCKET — Comunicación en tiempo real con el ESP32
+// ───────────────────────────────────────────────────────────────
+// El ESP32 actúa como servidor WebSocket. Esta interfaz se conecta
+// a él para enviar comandos y recibir eventos del proceso de lavado.
+
+/** Abre el modal de configuración de conexión */
+function openModal()  { document.getElementById('ws-modal').classList.add('open'); }
+/** Cierra el modal de configuración */
+function closeModal() { document.getElementById('ws-modal').classList.remove('open'); }
+
+/**
+ * Crea una nueva conexión WebSocket al ESP32.
+ * Lee la IP/host y el puerto del modal, construye la URL y
+ * registra los cuatro manejadores de eventos del WebSocket.
+ */
+function connectWS() {
+  const ip   = document.getElementById('ws-ip').value.trim();
+  const port = document.getElementById('ws-port').value.trim();
+  const url  = `ws://${ip}:${port}`; // Ejemplo: ws://carwash.local:81
+
+  addLog(`Conectando a ${url}...`, 'info');
+  document.getElementById('ws-status-text').textContent = `Conectando a ${url}...`;
+
+  // Cerrar conexión anterior si existe
+  if (S.wsConn) { S.wsConn.close(); S.wsConn = null; }
+
+  try {
+    S.wsConn = new WebSocket(url);
+
+    // onopen: conexión establecida exitosamente
+    S.wsConn.onopen = () => {
+      S.wsConnected = true;
+      setWsDot('on');                                          // Punto verde en el badge
+      document.getElementById('ws-label').textContent = `WS :: ${ip}`;
+      document.getElementById('ws-status-text').textContent = `Conectado a ${url}`;
+      addLog(`WebSocket conectado: ${url}`, 'ok');
+      closeModal(); // Cierra el modal al conectar exitosamente
+    };
+
+    // onmessage: recibe un comando del ESP32
+    // Convierte a mayúsculas y lo pasa al procesador de comandos
+    S.wsConn.onmessage = (e) => {
+      const cmd = e.data.trim().toUpperCase();
+      addLog(`← ESP32: ${cmd}`, 'info');
+      processCommand(cmd);
+    };
+
+    // onclose: la conexión fue cerrada (por timeout, red, o ESP32 reiniciado)
+    S.wsConn.onclose = () => {
+      S.wsConnected = false;
+      setWsDot('off'); // Punto rojo en el badge
+      document.getElementById('ws-label').textContent = 'DESCONECTADO';
+      document.getElementById('ws-status-text').textContent = 'Conexión cerrada';
+      addLog('WebSocket desconectado', 'warn');
+    };
+
+    // onerror: error al intentar la conexión (IP incorrecta, ESP32 apagado, etc.)
+    S.wsConn.onerror = () => {
+      addLog('Error de conexión WebSocket', 'err');
+      document.getElementById('ws-status-text').textContent = 'Error de conexión — verifica IP y puerto';
+    };
+
+  } catch(err) {
+    addLog('No se pudo crear WebSocket: ' + err.message, 'err');
+  }
+}
+
+/**
+ * Actualiza el color del punto indicador en el badge del header.
+ * @param {string} state - 'on' (verde/conectado), 'sim' (amarillo/simulación), otro (rojo/desconectado)
+ */
+function setWsDot(state) {
+  const d = document.getElementById('ws-dot');
+  d.className = 'dot' + (state === 'on' ? ' on' : state === 'sim' ? ' sim' : '');
+}
+
+/**
+ * Envía un comando al ESP32 por WebSocket.
+ * Si no hay conexión activa, lo registra como simulado en el log
+ * pero igual llama a processCommand para actualizar la UI.
+ * @param {string} cmd - Comando en mayúsculas (p.ej. 'MOTOR_ON', 'PAUSA')
+ */
+function sendWS(cmd) {
+  document.getElementById('last-sent').textContent = cmd; // Actualiza el monitor "Último enviado"
+  if (S.wsConnected && S.wsConn) {
+    S.wsConn.send(cmd);                          // Envío real al ESP32
+    addLog(`→ Enviado: ${cmd}`, 'warn');
+  } else {
+    addLog(`→ [SIM] ${cmd} (sin conexión real)`, 'warn'); // Modo simulación
+  }
+}
+// SELECCIÓN DE TIPO DE LAVADO
+/**
+ * Selecciona el tipo de lavado y bloquea la elección durante el ciclo.
+ *
+ * @param {string}  type   - 'completo' o 'rapido'
+ * @param {boolean} fromUI - true si el operador hizo clic en la tarjeta,
+ *                           false si el comando vino del ESP32 (LAVADOC/LAVADOR)
+ *
+ * Lógica de bloqueo:
+ *   - Si ya hay un tipo bloqueado y el cambio viene de la UI → rechazar.
+ *   - Si viene del ESP32 → actualizar sin importar el estado actual.
+ */
+function selectType(type, fromUI = true) {
+  if (S.washTypeLocked && fromUI) {
+    addLog('⚠ Selección bloqueada — ciclo en curso', 'warn');
+    return; // No se permite cambiar durante un ciclo activo
+  }
+
+  S.washType = type;
+  S.washTypeLocked = true; // Bloquear mientras dure el ciclo
+
+  const cCard = document.getElementById('type-completo');
+  const rCard = document.getElementById('type-rapido');
+
+  // Limpiar todas las clases de estado anteriores en ambas tarjetas
+  cCard.classList.remove('selected','selected-r','locked','locked-out');
+  rCard.classList.remove('selected','selected-r','locked','locked-out');
+
+  if (type === 'completo') {
+    cCard.classList.add('selected', 'locked');    // Resaltar y bloquear la seleccionada
+    rCard.classList.add('locked-out');             // Atenuar y desactivar la otra
+    document.getElementById('lock-badge-text').textContent = 'LAVADO COMPLETO — BLOQUEADO';
+  } else {
+    rCard.classList.add('selected-r', 'locked');  // Variante verde para Rápido
+    cCard.classList.add('locked-out');
+    document.getElementById('lock-badge-text').textContent = 'LAVADO RÁPIDO — BLOQUEADO';
+  }
+
+  // Mostrar el badge de bloqueo en la cabecera de la sección
+  document.getElementById('lock-badge').classList.add('visible');
+
+  // Si la selección viene de la UI, enviar el comando correspondiente al ESP32
+  if (fromUI) {
+    const cmd = type === 'completo' ? 'LAVADOC' : 'LAVADOR';
+    sendWS(cmd);
+    addLog(`Tipo seleccionado desde app: ${type.toUpperCase()} → enviando "${cmd}"`, 'ok');
+  }
+
+  // Reiniciar el índice de etapa activa y redibujar las tarjetas de etapas
+  S.currentStage = -1;
+  renderStages();
+}
+
+/**
+ * Desbloquea la selección de tipo de lavado y limpia el estado visual.
+ * Se llama desde resetToStandby() al finalizar o reiniciar el ciclo.
+ */
+function unlockWashType() {
+  S.washType = null;
+  S.washTypeLocked = false;
+
+  const cCard = document.getElementById('type-completo');
+  const rCard = document.getElementById('type-rapido');
+
+  // Quitar todas las clases de estado de ambas tarjetas
+  cCard.classList.remove('selected','selected-r','locked','locked-out');
+  rCard.classList.remove('selected','selected-r','locked','locked-out');
+
+  // Ocultar el badge de bloqueo
+  document.getElementById('lock-badge').classList.remove('visible');
+}
+
+// PROCESADOR DE COMANDOS
+// ───────────────────────────────────────────────────────────────
+// Función central que reacciona a los comandos, ya sea que lleguen
+// del ESP32 por WebSocket o que el operador los envíe desde la UI.
+// Actualiza el estado S y la interfaz visual según el comando.
+function processCommand(cmd) {
+  document.getElementById('last-cmd').textContent = cmd; // Mostrar en el pie del panel de etapas
+
+  switch(cmd) {
+
+    case 'ESPERA':
+      // El ESP32 indica que está esperando un nuevo vehículo
+      resetToStandby();
+      break;
+
+    case 'PROCESO':
+      // El ciclo de lavado ha comenzado
+      setSystemStatus('proceso');
+      break;
+
+    case 'LAVADOC':
+      // El ESP32 confirmó que se seleccionó Lavado Completo (p.ej. por botón físico)
+      selectType('completo', false);
+      addLog('Tipo recibido del Arduino: COMPLETO', 'ok');
+      break;
+
+    case 'LAVADOR':
+      // El ESP32 confirmó que se seleccionó Lavado Rápido
+      selectType('rapido', false);
+      addLog('Tipo recibido del Arduino: RÁPIDO', 'ok');
+      break;
+
+    // Comandos de etapas del proceso de lavado:
+    // Cada uno avanza el indicador visual a la etapa correspondiente.
+    case 'INICIO':
+    case 'ELECLAVADO':
+    case 'PRELAVADO':
+    case 'JABON':
+    case 'CEPILLO':
+    case 'ENJUAGUE':
+    case 'SECADO':
+      setStageByCmd(cmd);
+      setSystemStatus('proceso');
+      break;
+
+    case 'FINALIZADO':
+      // Ciclo completado: avanzar a la última etapa, actualizar contadores
+      // y volver automáticamente a ESPERA después de 3 segundos.
+      setStageByCmd('FINALIZADO');
+      setSystemStatus('finalizado');
+      S.carsToday++;
+      S.totalCycles++;
+      document.getElementById('cars-today').innerHTML = `${S.carsToday}<span>veh</span>`;
+      document.getElementById('total-cycles').innerHTML = `${S.totalCycles}<span>ciclos</span>`;
+      addLog(`✓ Ciclo completo — Total hoy: ${S.carsToday}`, 'ok');
+      setTimeout(() => processCommand('ESPERA'), 3000); // Auto-reset tras 3 segundos
+      break;
+
+    case 'ERROR_SIM':
+    case 'ERROR':
+      // Error en el sistema: requiere intervención del operador
+      setSystemStatus('error');
+      addLog('⚠ ERROR detectado — revisión requerida', 'err');
+      break;
+
+    case 'RESET':
+      // Reinicio manual del sistema al estado inicial
+      resetToStandby();
+      addLog('Sistema reiniciado', 'warn');
+      break;
+
+    case 'PAUSA':
+      // Alterna entre pausado y en curso (toggle)
+      S.paused = !S.paused;
+      addLog(S.paused ? 'Ciclo pausado' : 'Ciclo reanudado', 'info');
+      break;
+
+    case 'MOTOR_ON':
+      // Motor encendido (confirmado por el ESP32 o botón de la UI)
+      S.motorOn = true;
+      updateMotorBtn();
+      addLog('Motor ENCENDIDO', 'ok');
+      break;
+
+    case 'MOTOR_OFF':
+      // Motor apagado
+      S.motorOn = false;
+      updateMotorBtn();
+      addLog('Motor APAGADO', 'warn');
+      break;
+  }
+}
+// GESTIÓN DE ETAPAS DEL LAVADO
+
+/**
+ * Busca el índice de la etapa correspondiente al comando recibido
+ * y actualiza S.currentStage para que renderStages() la dibuje como activa.
+ * @param {string} cmd - Comando WebSocket (p.ej. 'JABON', 'SECADO')
+ */
+function setStageByCmd(cmd) {
+  const stageId = CMD_TO_STAGE[cmd]; // Busca el id de etapa en el mapa inverso
+  if (!stageId) return;              // Si el comando no corresponde a ninguna etapa, salir
+  const active = getActiveStages();
+  const idx = active.findIndex(s => s.id === stageId); // Índice dentro del array activo
+  S.currentStage = idx;
+  renderStages();
+  document.getElementById('stage-label').textContent = active[idx]?.name || '—';
+}
+
+/**
+ * Redibuja completamente la barra de etapas en la UI.
+ * Recorre el array de etapas activas y crea un elemento div por cada una,
+ * asignándoles la clase CSS correcta (done / active / idle).
+ * También actualiza la barra de progreso porcentual.
+ */
+function renderStages() {
+  const wrap   = document.getElementById('stages-wrap');
+  const stages = getActiveStages();
+  wrap.innerHTML = ''; // Limpiar etapas anteriores antes de redibujar
+
+  stages.forEach((st, i) => {
+    const div = document.createElement('div');
+
+    const isActive = i === S.currentStage; // ¿Es la etapa actualmente en curso?
+    const isDone   = i < S.currentStage;   // ¿Ya pasó esta etapa?
+
+    // Asignar clase según el estado: done > active > idle
+    div.className = 'stage ' + (
+      isDone   ? 'done'   :
+      isActive ? 'active' : 'idle'
+    );
+
+    // Construir el contenido interno de la tarjeta de etapa
+    let inner = `<span class="stage-icon">${st.icon}</span><div class="stage-name">${st.name}</div>`;
+
+    // Mostrar checkmark (✓) en etapas completadas Y en la etapa activa
+    if (isDone || isActive) inner += `<span class="stage-check">✓</span>`;
+
+    div.innerHTML = inner;
+    wrap.appendChild(div);
+  });
+
+  // Calcular y actualizar el porcentaje de progreso de la barra
+  let pct = 0;
+  if (S.currentStage >= 0) {
+    pct = Math.round((S.currentStage / Math.max(stages.length - 1, 1)) * 100);
+  }
+  document.getElementById('progress-fill').style.width = pct + '%';
+  document.getElementById('progress-pct').textContent = pct + '%';
+}
+
+// ESTADO GLOBAL DEL SISTEMA
+
+/**
+ * Cambia el estado visual del sistema (panel "Estado del Sistema").
+ * Quita "active-status" de todos los indicadores y se lo añade solo al activo.
+ * También actualiza la tarjeta de estado en la fila superior.
+ * @param {string} mode - 'espera' | 'proceso' | 'finalizado' | 'error'
+ */
+function setSystemStatus(mode) {
+  S.systemStatus = mode;
+
+  // Quitar el estado activo de todos los indicadores y eliminar el badge "ACTIVO"
+  ['espera','proceso','finalizado','error'].forEach(s => {
+    const el = document.getElementById('sts-' + s);
+    el.classList.remove('active-status');
+    const t = el.querySelector('.stag'); // Buscar y eliminar el badge dinámico
+    if (t) t.remove();
+  });
+
+  // Activar el indicador correspondiente al nuevo modo
+  const el = document.getElementById('sts-' + mode);
+  if (el) {
+    el.classList.add('active-status');
+    const tag = document.createElement('span');
+    tag.className = 'stag';
+    tag.textContent = 'ACTIVO';
+    el.appendChild(tag); // Insertar el badge "ACTIVO" dinámicamente
+  }
+
+  // Actualizar la tarjeta de estado en la fila superior (texto + color + descripción)
+  const main = document.getElementById('state-main');
+  const sub  = document.getElementById('state-sub');
+  const map = {
+    espera:     ['ESPERA',     'var(--accent2)', 'Sistema listo'],
+    proceso:    ['PROCESO',    'var(--accent)',  'Etapa activa'],
+    finalizado: ['FINALIZADO', 'var(--warn)',    'Vehículo listo para retiro'],
+    error:      ['ERROR',      'var(--danger)',  'Revisión requerida'],
+  };
+  const [txt, col, desc] = map[mode] || ['—','var(--muted)','—'];
+  main.textContent = txt; main.style.color = col; sub.textContent = desc;
+}
+
+
+// CONTROL DEL MOTOR
+
+/**
+ * Alterna el estado del motor (toggle ON/OFF).
+ * Envía el comando al ESP32 y procesa el cambio localmente.
+ */
+function toggleMotor() {
+  const cmd = S.motorOn ? 'MOTOR_OFF' : 'MOTOR_ON';
+  sendWS(cmd);
+  processCommand(cmd);
+}
+
+/**
+ * Actualiza el texto, ícono y estilo del botón de motor
+ * según el estado actual (S.motorOn).
+ */
+function updateMotorBtn() {
+  const btn = document.getElementById('btn-motor');
+  if (S.motorOn) {
+    btn.textContent = '■ MOTOR OFF';
+    btn.className = 'ctrl-btn stop'; // Rojo = apagar
+  } else {
+    btn.textContent = '▶ MOTOR ON';
+    btn.className = 'ctrl-btn start'; // Verde = encender
+  }
+}
+
+/**
+ * Envía un comando al ESP32 y lo procesa también en la UI local.
+ * Usado por los botones de control manual (PAUSA, RESET, ERROR_SIM).
+ * @param {string} cmd - Comando a enviar y procesar
+ */
+function sendCmd(cmd) {
+  sendWS(cmd);
+  processCommand(cmd);
+}
+
+
+// REINICIO DEL SISTEMA (RESET / STANDBY)
+
+/**
+ * Vuelve el sistema al estado inicial de reposo (ESPERA).
+ * Reinicia el temporizador, el índice de etapa, la pausa
+ * y desbloquea la selección de tipo de lavado.
+ */
+function resetToStandby() {
+  S.currentStage  = -1;  // Ninguna etapa activa
+  S.cycleSeconds  = 0;   // Reiniciar el cronómetro
+  S.paused        = false;
+
+  unlockWashType(); // Permitir nueva selección de tipo
+
+  document.getElementById('cycle-time').textContent  = '00:00'; // Reiniciar display del tiempo
+  document.getElementById('stage-label').textContent = '—';
+
+  renderStages();
+  setSystemStatus('espera');
+}
+
+// TEMPORIZADOR DEL CICLO
+// ───────────────────────────────────────────────────────────────
+// Se ejecuta cada segundo. Solo incrementa el contador si el sistema
+// está en estado 'proceso' y no está pausado.
+// Muestra el tiempo en formato MM:SS en la tarjeta de ciclos.
+
+setInterval(() => {
+  if (S.systemStatus === 'proceso' && !S.paused) {
+    S.cycleSeconds++;
+    // Formatear como MM:SS con ceros a la izquierda (padStart)
+    const m = String(Math.floor(S.cycleSeconds / 60)).padStart(2,'0');
+    const s = String(S.cycleSeconds % 60).padStart(2,'0');
+    document.getElementById('cycle-time').textContent = `${m}:${s}`;
+  }
+}, 1000);
+
+
+// REGISTRO DE EVENTOS (LOG)
+/**
+ * Agrega una nueva entrada al panel de registro de eventos.
+ * Las entradas se insertan al inicio (prepend) para mostrar las más recientes arriba.
+ * Se limita a 35 entradas: las más antiguas se eliminan automáticamente.
+ *
+ * @param {string} msg  - Texto descriptivo del evento
+ * @param {string} type - Tipo visual: 'info' (azul) | 'ok' (verde) | 'warn' (amarillo) | 'err' (rojo)
+ */
+function addLog(msg, type='info') {
+  const list = document.getElementById('log-list');
+  const t = new Date().toTimeString().slice(0,8); // Timestamp HH:MM:SS
+  const e = document.createElement('div');
+  e.className = `log-entry ${type}`;
+  e.innerHTML = `<span class="log-time">${t}</span><span>${msg}</span>`;
+  list.prepend(e); // Insertar al inicio para orden cronológico inverso
+  // Eliminar la entrada más antigua si se supera el límite de 35
+  while (list.children.length > 35) list.removeChild(list.lastChild);
+}
+// INICIALIZACIÓN DE LA APLICACIÓN
+// ───────────────────────────────────────────────────────────────
+// Se ejecuta una vez al cargar la página. Establece el estado visual
+// inicial y muestra los mensajes de bienvenida en el log.
+setWsDot('off');           // Badge de conexión en rojo (sin conexión al inicio)
+renderStages();            // Dibujar las etapas en estado "idle"
+setSystemStatus('espera'); // Estado inicial: ESPERA
+addLog('Sistema AquaWash iniciado', 'ok');
+addLog('Haz clic en DESCONECTADO para conectar al ESP32', 'info');
+addLog('Sin conexión — modo simulación disponible', 'warn');
+</script>
+</body>
+</html>
